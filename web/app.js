@@ -612,16 +612,19 @@
     }
   }
   async function tryAutoLogin() {
-    if (!password) return;
+    if (!password) { showLogin(); return; }
     const loginTime = getActiveLoginTime();
     if (loginTime && Date.now() - loginTime > 72 * 3600 * 1000) {
       clearActivePassword();
+      showLogin();
       return;
     }
+    showMain(); // 已登录，先显示主页面，避免闪过登录框
     try {
       const res = await api('/status');
-      if (res.ok) { showMain(); loadData(); }
-    } catch (e) { }
+      if (res.ok) { loadData(); }
+      else { showLogin(); }
+    } catch (e) { showLogin(); }
   }
   async function login() {
     password = $('pwdField').value;
@@ -653,8 +656,14 @@
     location.reload();
   }
   function showMain() {
+    document.documentElement.classList.remove('pre-auth');
     $('loginPage').classList.add('hidden');
     $('mainPage').classList.remove('hidden');
+  }
+  function showLogin() {
+    document.documentElement.classList.remove('pre-auth');
+    $('mainPage').classList.add('hidden');
+    $('loginPage').classList.remove('hidden');
   }
 
   // Data loaders

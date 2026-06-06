@@ -18,8 +18,21 @@
       if (css) css.href = '/admin/styles.css?v=' + v;
       var tcss = document.getElementById('__toastCss');
       if (tcss) tcss.href = '/admin/toast.css?v=' + v;
+      // 首屏前同步判断本地是否已登录，避免已登录时仍闪过登录框
+      try {
+        if (localStorage.getItem('kiro_remember') !== '1') {
+          localStorage.removeItem('admin_password');
+          localStorage.removeItem('admin_login_time');
+        }
+        var pwd = sessionStorage.getItem('admin_password') || localStorage.getItem('admin_password') || '';
+        if (pwd) document.documentElement.classList.add('pre-auth');
+      } catch (e) {}
     })();
   </script>
+  <style>
+    html.pre-auth #loginPage { display: none !important; }
+    html.pre-auth #mainPage { display: block !important; }
+  </style>
 </head>
 
 <body>
