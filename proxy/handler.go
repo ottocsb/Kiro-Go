@@ -237,8 +237,10 @@ func NewHandler() *Handler {
 
 // backgroundRefresh 后台定时刷新账户信息
 func (h *Handler) backgroundRefresh() {
-	ticker := time.NewTicker(30 * time.Minute) // 每 30 分钟刷新一次
-	defer ticker.Stop()
+	tokenTicker := time.NewTicker(1 * time.Minute) // token 临期检查：每分钟一次
+	infoTicker := time.NewTicker(30 * time.Minute) // 用量与模型列表：每 30 分钟一次
+	defer tokenTicker.Stop()
+	defer infoTicker.Stop()
 
 	// 启动时延迟 10 秒后执行一次
 	time.Sleep(10 * time.Second)
@@ -247,7 +249,9 @@ func (h *Handler) backgroundRefresh() {
 
 	for {
 		select {
-		case <-ticker.C:
+		case <-tokenTicker.C:
+			h.refreshTokensIfNeeded()
+		case <-infoTicker.C:
 			h.refreshModelsCache()
 			h.refreshAllAccounts()
 		case <-h.stopRefresh:
@@ -266,25 +270,7 @@ func (h *Handler) refreshAllAccounts() {
 		}
 
 		// 检查 token 是否需要刷新
-		if account.ExpiresAt > 0 && time.Now().Unix() > account.ExpiresAt-tokenRefreshSkewSeconds {
-			newAccessToken, newRefreshToken, newExpiresAt, profileArn, err := auth.RefreshToken(account)
-			if err != nil {
-				logger.Warnf("[BackgroundRefresh] Token refresh failed for %s: %v", account.Email, err)
-				h.handleAccountFailure(account, err)
-				continue
-			}
-			account.AccessToken = newAccessToken
-			if newRefreshToken != "" {
-				account.RefreshToken = newRefreshToken
-			}
-			account.ExpiresAt = newExpiresAt
-			config.UpdateAccountToken(account.ID, newAccessToken, newRefreshToken, newExpiresAt)
-			h.pool.UpdateToken(account.ID, newAccessToken, newRefreshToken, newExpiresAt)
-			if profileArn != "" {
-				account.ProfileArn = profileArn
-				config.UpdateAccountProfileArn(account.ID, profileArn)
-			}
-		}
+		h.refreshAccountTokenIfNeeded(account)
 
 		// 刷新账户信息
 		info, err := RefreshAccountInfo(account)
@@ -297,6 +283,50 @@ func (h *Handler) refreshAllAccounts() {
 		logger.Infof("[BackgroundRefresh] Refreshed %s: %s %.1f/%.1f", account.Email, info.SubscriptionType, info.UsageCurrent, info.UsageLimit)
 	}
 	h.pool.Reload()
+}
+
+// refreshTokensIfNeeded 高频检查所有账号 token，仅刷新临近过期的（不刷用量/模型，避免上游压力）
+func (h *Handler) refreshTokensIfNeeded() {
+	accounts := config.GetAccounts()
+	refreshed := false
+	for i := range accounts {
+		account := &accounts[i]
+		if !account.Enabled || account.AccessToken == "" {
+			continue
+		}
+		if h.refreshAccountTokenIfNeeded(account) {
+			refreshed = true
+		}
+	}
+	if refreshed {
+		h.pool.Reload()
+	}
+}
+
+// refreshAccountTokenIfNeeded 若账号 token 临近过期（剩余不足 tokenRefreshSkewSeconds）则刷新，返回是否实际刷新
+func (h *Handler) refreshAccountTokenIfNeeded(account *config.Account) bool {
+	if account.ExpiresAt <= 0 || time.Now().Unix() <= account.ExpiresAt-tokenRefreshSkewSeconds {
+		return false
+	}
+	newAccessToken, newRefreshToken, newExpiresAt, profileArn, err := auth.RefreshToken(account)
+	if err != nil {
+		logger.Warnf("[TokenRefresh] Token refresh failed for %s: %v", account.Email, err)
+		h.handleAccountFailure(account, err)
+		return false
+	}
+	account.AccessToken = newAccessToken
+	if newRefreshToken != "" {
+		account.RefreshToken = newRefreshToken
+	}
+	account.ExpiresAt = newExpiresAt
+	config.UpdateAccountToken(account.ID, newAccessToken, newRefreshToken, newExpiresAt)
+	h.pool.UpdateToken(account.ID, newAccessToken, newRefreshToken, newExpiresAt)
+	if profileArn != "" {
+		account.ProfileArn = profileArn
+		config.UpdateAccountProfileArn(account.ID, profileArn)
+	}
+	logger.Infof("[TokenRefresh] Refreshed token for %s", account.Email)
+	return true
 }
 
 // validateApiKey 验证 API Key（Bool 包装，旧签名仍被部分调用方使用）
