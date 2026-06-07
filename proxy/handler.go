@@ -2922,12 +2922,15 @@ func (h *Handler) apiGetStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) apiGetSettings(w http.ResponseWriter, r *http.Request) {
+	retryCfg := config.GetRetryConfig()
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"apiKey":         config.GetApiKey(),
-		"requireApiKey":  config.IsApiKeyRequired(),
-		"port":           config.GetPort(),
-		"host":           config.GetHost(),
-		"allowOverUsage": config.GetAllowOverUsage(),
+		"apiKey":          config.GetApiKey(),
+		"requireApiKey":   config.IsApiKeyRequired(),
+		"port":            config.GetPort(),
+		"host":            config.GetHost(),
+		"allowOverUsage":  config.GetAllowOverUsage(),
+		"retryOnThrottle": retryCfg.Enabled,
+		"retryMaxRetries": retryCfg.MaxRetries,
 	})
 }
 
@@ -2976,10 +2979,12 @@ func (h *Handler) apiUpdatePromptFilter(w http.ResponseWriter, r *http.Request) 
 
 func (h *Handler) apiUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		ApiKey         *string `json:"apiKey,omitempty"`
-		RequireApiKey  *bool   `json:"requireApiKey,omitempty"`
-		Password       string  `json:"password,omitempty"`
-		AllowOverUsage *bool   `json:"allowOverUsage,omitempty"`
+		ApiKey          *string `json:"apiKey,omitempty"`
+		RequireApiKey   *bool   `json:"requireApiKey,omitempty"`
+		Password        string  `json:"password,omitempty"`
+		AllowOverUsage  *bool   `json:"allowOverUsage,omitempty"`
+		RetryOnThrottle *bool   `json:"retryOnThrottle,omitempty"`
+		RetryMaxRetries *int    `json:"retryMaxRetries,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		w.WriteHeader(400)
@@ -3002,6 +3007,19 @@ func (h *Handler) apiUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		// Rebuild the pool so over-quota accounts are re-included or dropped immediately.
 		h.pool.Reload()
+	}
+
+	// 更新限流自动重试设置
+	if req.RetryOnThrottle != nil {
+		maxRetries := 0
+		if req.RetryMaxRetries != nil {
+			maxRetries = *req.RetryMaxRetries
+		}
+		if err := config.UpdateRetryConfig(*req.RetryOnThrottle, maxRetries); err != nil {
+			w.WriteHeader(500)
+			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
 	}
 
 	json.NewEncoder(w).Encode(map[string]bool{"success": true})

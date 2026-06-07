@@ -334,6 +334,24 @@
           <button class="btn btn-primary" id="saveEndpointBtn" data-i18n="settings.saveEndpoint"></button>
         </div>
 
+        <!-- Retry settings -->
+        <div class="card">
+          <div class="card-header"><span class="card-title" data-i18n="settings.retrySettings"></span></div>
+          <div class="form-group">
+            <label class="flex items-center gap-2">
+              <span class="switch"><input type="checkbox" id="retryOnThrottle" /><span class="slider"></span></span>
+              <span data-i18n="settings.retryOnThrottle"></span>
+            </label>
+            <small data-i18n="settings.retryOnThrottleHint"></small>
+          </div>
+          <div class="form-group">
+            <label data-i18n="settings.retryMaxRetries"></label>
+            <input type="number" id="retryMaxRetries" min="1" max="10" step="1" placeholder="3" />
+            <small data-i18n="settings.retryMaxRetriesHint"></small>
+          </div>
+          <button class="btn btn-primary" id="saveRetryBtn" data-i18n="settings.saveRetry"></button>
+        </div>
+
         <!-- Admin password -->
         <div class="card">
           <div class="card-header"><span class="card-title" data-i18n="settings.adminPassword"></span></div>

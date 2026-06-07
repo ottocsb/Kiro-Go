@@ -1429,6 +1429,8 @@
     const d = await res.json();
     $('requireApiKey').checked = d.requireApiKey;
     $('allowOverUsage').checked = d.allowOverUsage || false;
+    $('retryOnThrottle').checked = d.retryOnThrottle || false;
+    $('retryMaxRetries').value = d.retryMaxRetries || 3;
     await Promise.all([loadThinkingConfig(), loadEndpointConfig(), loadProxyConfig(), loadPromptFilter(), loadApiKeys()]);
     refreshCustomSelects();
   }
@@ -1536,6 +1538,15 @@
     const allowOverUsage = $('allowOverUsage').checked;
     await api('/settings', { method: 'POST', body: JSON.stringify({ allowOverUsage }) });
     toast(t('settings.overUsageSaved'), 'success');
+  }
+  async function saveRetryConfig() {
+    const retryOnThrottle = $('retryOnThrottle').checked;
+    let retryMaxRetries = parseInt($('retryMaxRetries').value, 10);
+    if (!Number.isFinite(retryMaxRetries) || retryMaxRetries < 1) retryMaxRetries = 3;
+    if (retryMaxRetries > 10) retryMaxRetries = 10;
+    $('retryMaxRetries').value = retryMaxRetries;
+    await api('/settings', { method: 'POST', body: JSON.stringify({ retryOnThrottle, retryMaxRetries }) });
+    toast(t('settings.retrySaved'), 'success');
   }
   async function changePassword() {
     const np = $('newPassword').value;
@@ -2683,6 +2694,7 @@
   function bindSettingsEvents() {
     $('saveRequireApiKeyBtn').addEventListener('click', saveRequireApiKey);
     $('saveOverUsageBtn').addEventListener('click', saveOverUsageConfig);
+    $('saveRetryBtn').addEventListener('click', saveRetryConfig);
     $('saveThinkingBtn').addEventListener('click', saveThinkingConfig);
     $('saveEndpointBtn').addEventListener('click', saveEndpointConfig);
     $('changePasswordBtn').addEventListener('click', changePassword);

@@ -337,70 +337,120 @@ func CallKiroAPI(account *config.Account, payload *KiroPayload, callback *KiroSt
 	// Build endpoint list ordered by configuration.
 	endpoints := getSortedEndpoints(config.GetPreferredEndpoint())
 
-	var lastErr error
-	for _, ep := range endpoints {
-		// Update the origin field for the selected endpoint.
-		payload.ConversationState.CurrentMessage.UserInputMessage.Origin = ep.Origin
+	// runEndpointSweep performs one full pass over the configured endpoints.
+	// It returns nil on success. A transient upstream rate-limit (HTTP 429
+	// "quota exhausted") surfaces as a retryable error; hard failures (auth,
+	// payment) are returned immediately without trying further endpoints.
+	runEndpointSweep := func() error {
+		var lastErr error
+		for _, ep := range endpoints {
+			// Update the origin field for the selected endpoint.
+			payload.ConversationState.CurrentMessage.UserInputMessage.Origin = ep.Origin
 
-		reqBody, _ := json.Marshal(payload)
-		req, err := http.NewRequest("POST", ep.URL, bytes.NewReader(reqBody))
-		if err != nil {
-			lastErr = err
-			continue
-		}
-
-		host := ""
-		if parsedURL, parseErr := url.Parse(ep.URL); parseErr == nil {
-			host = parsedURL.Host
-		}
-		headerValues := buildStreamingHeaderValues(account, host)
-
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Accept", "*/*")
-		if ep.AmzTarget != "" {
-			req.Header.Set("X-Amz-Target", ep.AmzTarget)
-		}
-		applyKiroBaseHeaders(req, account, headerValues)
-		req.Header.Set("x-amzn-kiro-agent-mode", "vibe")
-		req.Header.Set("x-amzn-codewhisperer-optout", "true")
-		req.Header.Set("Amz-Sdk-Request", "attempt=1; max=3")
-		req.Header.Set("Amz-Sdk-Invocation-Id", uuid.New().String())
-
-		resp, err := GetClientForProxy(ResolveAccountProxyURL(account)).Do(req)
-		if err != nil {
-			lastErr = err
-			logger.Warnf("[KiroAPI] Endpoint %s failed: %v", ep.Name, err)
-			continue
-		}
-
-		if resp.StatusCode == 429 {
-			resp.Body.Close()
-			logger.Warnf("[KiroAPI] Endpoint %s quota exhausted (429), trying next...", ep.Name)
-			lastErr = fmt.Errorf("quota exhausted on %s", ep.Name)
-			continue
-		}
-
-		if resp.StatusCode != 200 {
-			errBody, _ := io.ReadAll(resp.Body)
-			resp.Body.Close()
-			lastErr = fmt.Errorf("HTTP %d from %s: %s", resp.StatusCode, ep.Name, string(errBody))
-			// Authentication errors and payment errors are not retried across endpoints.
-			if resp.StatusCode == 401 || resp.StatusCode == 403 || resp.StatusCode == 402 {
-				return lastErr
+			reqBody, _ := json.Marshal(payload)
+			req, err := http.NewRequest("POST", ep.URL, bytes.NewReader(reqBody))
+			if err != nil {
+				lastErr = err
+				continue
 			}
-			logger.Warnf("[KiroAPI] Endpoint %s error: %v", ep.Name, lastErr)
-			continue
+
+			host := ""
+			if parsedURL, parseErr := url.Parse(ep.URL); parseErr == nil {
+				host = parsedURL.Host
+			}
+			headerValues := buildStreamingHeaderValues(account, host)
+
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Accept", "*/*")
+			if ep.AmzTarget != "" {
+				req.Header.Set("X-Amz-Target", ep.AmzTarget)
+			}
+			applyKiroBaseHeaders(req, account, headerValues)
+			req.Header.Set("x-amzn-kiro-agent-mode", "vibe")
+			req.Header.Set("x-amzn-codewhisperer-optout", "true")
+			req.Header.Set("Amz-Sdk-Request", "attempt=1; max=3")
+			req.Header.Set("Amz-Sdk-Invocation-Id", uuid.New().String())
+
+			resp, err := GetClientForProxy(ResolveAccountProxyURL(account)).Do(req)
+			if err != nil {
+				lastErr = err
+				logger.Warnf("[KiroAPI] Endpoint %s failed: %v", ep.Name, err)
+				continue
+			}
+
+			if resp.StatusCode == 429 {
+				resp.Body.Close()
+				logger.Warnf("[KiroAPI] Endpoint %s quota exhausted (429), trying next...", ep.Name)
+				lastErr = fmt.Errorf("quota exhausted on %s", ep.Name)
+				continue
+			}
+
+			if resp.StatusCode != 200 {
+				errBody, _ := io.ReadAll(resp.Body)
+				resp.Body.Close()
+				lastErr = fmt.Errorf("HTTP %d from %s: %s", resp.StatusCode, ep.Name, string(errBody))
+				// Authentication errors and payment errors are not retried across endpoints.
+				if resp.StatusCode == 401 || resp.StatusCode == 403 || resp.StatusCode == 402 {
+					return lastErr
+				}
+				logger.Warnf("[KiroAPI] Endpoint %s error: %v", ep.Name, lastErr)
+				continue
+			}
+
+			err = parseEventStream(resp.Body, callback)
+			resp.Body.Close()
+			return err
 		}
 
-		err = parseEventStream(resp.Body, callback)
-		resp.Body.Close()
-		return err
+		if lastErr != nil {
+			return lastErr
+		}
+		return fmt.Errorf("all endpoints failed")
 	}
 
-	if lastErr != nil {
-		return lastErr
+	// Optionally retry the whole sweep when the upstream is transiently
+	// throttled. The 429 is detected before any stream bytes are emitted, so a
+	// retry never produces duplicate output. Disabled by default; other errors
+	// are returned to the caller unchanged.
+	retryCfg := config.GetRetryConfig()
+	maxAttempts := 1
+	if retryCfg.Enabled {
+		maxAttempts = retryCfg.MaxRetries + 1
 	}
-	return fmt.Errorf("all endpoints failed")
+
+	var err error
+	for try := 1; try <= maxAttempts; try++ {
+		err = runEndpointSweep()
+		if err == nil || !isRetryableThrottleError(err) {
+			return err
+		}
+		if try < maxAttempts {
+			// A concurrency throttle clears quickly, so keep the backoff short:
+			// linear growth capped at 2s to bound total wait even at high counts.
+			backoff := time.Duration(try) * 500 * time.Millisecond
+			if backoff > 2*time.Second {
+				backoff = 2 * time.Second
+			}
+			logger.Warnf("[KiroAPI] Upstream throttled, retrying (%d/%d) after %v: %v", try, maxAttempts-1, backoff, err)
+			time.Sleep(backoff)
+		}
+	}
+	return err
+}
+
+// isRetryableThrottleError reports whether an upstream error is a transient
+// rate-limit (HTTP 429 "quota exhausted" / throttling) that is likely to
+// succeed on retry. Hard failures (auth, payment, malformed requests, or
+// mid-stream transport errors) do not match and are surfaced to the caller.
+func isRetryableThrottleError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "quota exhausted") ||
+		strings.Contains(msg, "too many requests") ||
+		strings.Contains(msg, "throttl") ||
+		strings.Contains(msg, "http 429")
 }
 
 // ==================== Event Stream Parsing ====================

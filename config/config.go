@@ -169,6 +169,15 @@ type Config struct {
 	// Defaults to true. Set to false to only use the preferred endpoint.
 	EndpointFallback *bool `json:"endpointFallback,omitempty"`
 
+	// RetryOnThrottle enables automatic retry of a request when the upstream
+	// returns a transient rate-limit (HTTP 429 "quota exhausted on ...").
+	// Other errors are returned to the caller unchanged. Disabled by default.
+	RetryOnThrottle bool `json:"retryOnThrottle,omitempty"`
+
+	// RetryMaxRetries is the number of extra attempts performed when
+	// RetryOnThrottle is enabled. When unset (0) a default of 3 is used.
+	RetryMaxRetries int `json:"retryMaxRetries,omitempty"`
+
 	// AllowOverUsage allows accounts to continue serving requests even when their
 	// usage quota has been exhausted. When enabled, the pool will not skip accounts
 	// solely because usageCurrent >= usageLimit.
@@ -801,6 +810,51 @@ func UpdateEndpointFallback(enabled bool) error {
 	cfgLock.Lock()
 	defer cfgLock.Unlock()
 	cfg.EndpointFallback = &enabled
+	return Save()
+}
+
+// RetryConfig holds the upstream throttle-retry settings.
+type RetryConfig struct {
+	Enabled    bool `json:"enabled"`
+	MaxRetries int  `json:"maxRetries"`
+}
+
+const (
+	defaultRetryMaxRetries = 3
+	maxRetryMaxRetries     = 10
+)
+
+// GetRetryConfig returns the upstream throttle-retry settings. The retry count
+// is clamped to [1, maxRetryMaxRetries], defaulting to defaultRetryMaxRetries
+// when unset, so callers always receive a usable value.
+func GetRetryConfig() RetryConfig {
+	cfgLock.RLock()
+	defer cfgLock.RUnlock()
+	if cfg == nil {
+		return RetryConfig{MaxRetries: defaultRetryMaxRetries}
+	}
+	rc := RetryConfig{Enabled: cfg.RetryOnThrottle, MaxRetries: cfg.RetryMaxRetries}
+	if rc.MaxRetries < 1 {
+		rc.MaxRetries = defaultRetryMaxRetries
+	}
+	if rc.MaxRetries > maxRetryMaxRetries {
+		rc.MaxRetries = maxRetryMaxRetries
+	}
+	return rc
+}
+
+// UpdateRetryConfig persists the throttle-retry settings. A non-positive
+// maxRetries leaves the stored count unchanged.
+func UpdateRetryConfig(enabled bool, maxRetries int) error {
+	cfgLock.Lock()
+	defer cfgLock.Unlock()
+	cfg.RetryOnThrottle = enabled
+	if maxRetries > 0 {
+		if maxRetries > maxRetryMaxRetries {
+			maxRetries = maxRetryMaxRetries
+		}
+		cfg.RetryMaxRetries = maxRetries
+	}
 	return Save()
 }
 
