@@ -1,5 +1,5 @@
-# 前端构建阶段：用 pnpm 构建 React 管理面板，产物输出到 /app/web
-FROM node:22-alpine AS frontend
+# 前端构建阶段：产物为静态文件（与架构无关），固定在构建机平台只构建一次
+FROM --platform=$BUILDPLATFORM node:22-alpine AS frontend
 RUN corepack enable
 WORKDIR /app/frontend
 COPY frontend/package.json frontend/pnpm-lock.yaml ./
