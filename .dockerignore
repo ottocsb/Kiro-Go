@@ -8,3 +8,7 @@ docker-compose.yml
 README.md
 README_CN.md
 *.log
+.migration
+frontend/node_modules
+frontend/dist
+web

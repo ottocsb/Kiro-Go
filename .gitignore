@@ -5,6 +5,14 @@
 *.test
 *.out
 
+# Frontend：依赖与构建产物（web/ 由 Vite 构建生成，Docker 内重建）
+/frontend/node_modules/
+/frontend/dist/
+/web/
+
+# 迁移过程的临时规格文档
+/.migration/
+
 # Runtime data
 /data/
 *.log

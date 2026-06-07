@@ -9,6 +9,7 @@ import (
 	"kiro-go/logger"
 	"kiro-go/pool"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -3360,7 +3361,13 @@ func (h *Handler) serveAdminPage(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) serveStaticFile(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/admin/")
-	http.ServeFile(w, r, "web/"+path)
+	full := "web/" + path
+	// SPA 回退：请求的静态文件不存在（或是目录）时返回 index.html
+	if info, err := os.Stat(full); err != nil || info.IsDir() {
+		http.ServeFile(w, r, "web/index.html")
+		return
+	}
+	http.ServeFile(w, r, full)
 }
 
 // apiGetThinkingConfig 获取 thinking 配置
