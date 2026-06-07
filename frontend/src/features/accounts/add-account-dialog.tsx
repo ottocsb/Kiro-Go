@@ -9,7 +9,6 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
-import { ScrollArea } from '@/components/ui/scroll-area'
 import { useT } from '@/i18n/i18n'
 import { apiPost } from '@/lib/api'
 import { useAppData } from '@/hooks/use-app-data'
@@ -68,13 +67,13 @@ export function AddAccountDialog({ open, onClose }: { open: boolean; onClose: ()
 
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="max-h-[90vh] sm:max-w-lg">
+      <DialogContent className="flex max-h-[90vh] flex-col overflow-hidden sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>{t(TITLE_KEY[method])}</DialogTitle>
           <DialogDescription className="sr-only">{t('modal.addAccount')}</DialogDescription>
         </DialogHeader>
 
-        <ScrollArea className="max-h-[72vh] pr-3">
+        <div className="min-h-0 flex-1 overflow-y-auto pr-2">
           {method === 'add' ? (
             <div className="space-y-2">
               {METHODS.map(({ key, icon: Icon }) => (
@@ -111,7 +110,7 @@ export function AddAccountDialog({ open, onClose }: { open: boolean; onClose: ()
           ) : (
             <CookiePanel onBack={back} finish={finish} />
           )}
-        </ScrollArea>
+        </div>
       </DialogContent>
     </Dialog>
   )
